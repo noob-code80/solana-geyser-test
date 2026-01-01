@@ -24,25 +24,37 @@ jobs:
           iex ((New-Object System.Net.WebClient).DownloadString('https://community.chocolatey.org/install.ps1'))
         }
     
-    - name: Install protoc
+    - name: Install dependencies
       shell: pwsh
       run: |
-        choco install protoc -y
+        choco install protoc mingw -y
         $protocPath = "C:\ProgramData\chocolatey\lib\protoc\tools\bin\protoc.exe"
+        $mingwPath = "C:\ProgramData\chocolatey\lib\mingw\tools\install\mingw64\bin"
+        
         if (Test-Path $protocPath) {
           echo "PROTOC=$protocPath" >> $env:GITHUB_ENV
-          echo "✅ protoc installed at $protocPath"
-        } else {
-          echo "⚠️ protoc not found, will use vendored version"
+          echo "✅ protoc installed"
+        }
+        
+        if (Test-Path $mingwPath) {
+          echo "$mingwPath" >> $env:GITHUB_PATH
+          echo "✅ MinGW installed"
         }
     
     - name: Build
       shell: pwsh
       run: |
         $env:RUST_BACKTRACE = "1"
+        $env:PROTOC = "C:\ProgramData\chocolatey\lib\protoc\tools\bin\protoc.exe"
+        # Используем MinGW для компиляции protobuf-src
+        $env:CC = "gcc"
+        $env:CXX = "g++"
+        $env:PATH = "C:\ProgramData\chocolatey\lib\mingw\tools\install\mingw64\bin;$env:PATH"
         cargo build --release
       env:
-        PROTOC: ${{ env.PROTOC }}
+        PROTOC: C:\ProgramData\chocolatey\lib\protoc\tools\bin\protoc.exe
+        CC: gcc
+        CXX: g++
     
     - name: Upload artifact
       uses: actions/upload-artifact@v4
