@@ -1,5 +1,5 @@
 use anyhow::Result;
-use futures::{SinkExt, StreamExt};
+use futures::{SinkExt, StreamExt, Stream};
 use log::{error, info, warn};
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -8,11 +8,12 @@ use tokio::sync::broadcast;
 use bs58;
 use axum::{
     extract::State,
-    http::StatusCode,
-    response::{sse::Event, Sse},
+    http::{StatusCode, HeaderMap, HeaderValue},
+    response::{Response, IntoResponse},
     routing::get,
     Router,
 };
+use tokio_stream::{wrappers::BroadcastStream, StreamExt as TokioStreamExt};
 use serde::{Deserialize, Serialize};
 use yellowstone_grpc_client::{GeyserGrpcClient, ClientTlsConfig};
 use yellowstone_grpc_proto::prelude::{
@@ -148,17 +149,32 @@ async fn subscribe_once(endpoint: &str, state: AppState) -> Result<()> {
     Ok(())
 }
 
-async fn sse_handler(State(tx): State<AppState>) -> Sse<impl StreamExt<Item = Result<Event, axum::Error>>> {
-    let mut rx = tx.subscribe();
+async fn sse_handler(State(tx): State<AppState>) -> impl IntoResponse {
+    let rx = tx.subscribe();
+    let stream = BroadcastStream::new(rx);
     
-    let stream = async_stream::stream! {
-        while let Ok(create_tx) = rx.recv().await {
-            let json = serde_json::to_string(&create_tx).unwrap();
-            yield Ok(Event::default().data(json));
-        }
-    };
+    let stream = stream.filter_map(|result| {
+        futures::future::ready(match result {
+            Ok(create_tx) => {
+                let json = serde_json::to_string(&create_tx).ok()?;
+                Some(format!("data: {}\n\n", json))
+            }
+            Err(_) => None,
+        })
+    });
 
-    Sse::new(stream)
+    let mut headers = HeaderMap::new();
+    headers.insert("Content-Type", HeaderValue::from_static("text/event-stream"));
+    headers.insert("Cache-Control", HeaderValue::from_static("no-cache"));
+    headers.insert("Connection", HeaderValue::from_static("keep-alive"));
+
+    Response::builder()
+        .status(StatusCode::OK)
+        .header("Content-Type", "text/event-stream")
+        .header("Cache-Control", "no-cache")
+        .header("Connection", "keep-alive")
+        .body(axum::body::Body::from_stream(stream))
+        .unwrap()
 }
 
 async fn health_handler() -> (StatusCode, &'static str) {
