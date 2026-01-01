@@ -150,6 +150,9 @@ async fn subscribe_once(endpoint: &str, state: AppState) -> Result<()> {
 }
 
 async fn sse_handler(State(tx): State<AppState>) -> impl IntoResponse {
+    use axum::body::Body;
+    use axum::body::HttpBody;
+    
     let rx = tx.subscribe();
     let stream = BroadcastStream::new(rx);
     
@@ -157,23 +160,20 @@ async fn sse_handler(State(tx): State<AppState>) -> impl IntoResponse {
         futures::future::ready(match result {
             Ok(create_tx) => {
                 let json = serde_json::to_string(&create_tx).ok()?;
-                Some(format!("data: {}\n\n", json))
+                Some(Ok::<_, std::io::Error>(format!("data: {}\n\n", json)))
             }
             Err(_) => None,
         })
     });
 
-    let mut headers = HeaderMap::new();
-    headers.insert("Content-Type", HeaderValue::from_static("text/event-stream"));
-    headers.insert("Cache-Control", HeaderValue::from_static("no-cache"));
-    headers.insert("Connection", HeaderValue::from_static("keep-alive"));
-
+    let body = Body::from_stream(stream);
+    
     Response::builder()
         .status(StatusCode::OK)
         .header("Content-Type", "text/event-stream")
         .header("Cache-Control", "no-cache")
         .header("Connection", "keep-alive")
-        .body(axum::body::Body::from_stream(stream))
+        .body(body)
         .unwrap()
 }
 
