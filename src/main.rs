@@ -10,6 +10,16 @@ use yellowstone_grpc_proto::prelude::{
     SubscribeUpdate, subscribe_update::UpdateOneof,
 };
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct CreateTransaction {
+    signature: String,
+    mint_address: String,
+    creator_address: String,
+    slot: u64,
+}
+
+type AppState = Arc<broadcast::Sender<CreateTransaction>>;
+
 #[tokio::main]
 async fn main() -> Result<()> {
     // Устанавливаем уровень логирования по умолчанию, если не задан
@@ -23,12 +33,63 @@ async fn main() -> Result<()> {
         .install_default()
         .expect("Failed to install crypto provider");
 
-    let endpoint = "http://fr.grpc.gadflynode.com:25565";
+    // Создаем broadcast channel для отправки Create транзакций
+    let (tx, _) = broadcast::channel::<CreateTransaction>(1000);
+    let state = Arc::new(tx);
 
+    // Запускаем HTTP сервер для SSE
+    let state_clone = state.clone();
+    tokio::spawn(async move {
+        let app = Router::new()
+            .route("/events", get(sse_handler))
+            .route("/health", get(health_handler))
+            .with_state(state_clone);
+
+        let listener = tokio::net::TcpListener::bind("0.0.0.0:8724").await.unwrap();
+        info!("🌐 HTTP сервер запущен на http://0.0.0.0:8724/events");
+        axum::serve(listener, app).await.unwrap();
+    });
+
+    // Запускаем GRPC подписку
+    let grpc_state = state.clone();
+    tokio::spawn(async move {
+        if let Err(e) = run_grpc_subscription(grpc_state).await {
+            error!("GRPC ошибка: {}", e);
+        }
+    });
+
+    // Ждем бесконечно
+    tokio::signal::ctrl_c().await?;
+    info!("Остановка сервера...");
+    Ok(())
+}
+
+async fn run_grpc_subscription(state: AppState) -> Result<()> {
+    let endpoint = "http://fr.grpc.gadflynode.com:25565";
+    let mut backoff = tokio::time::Duration::from_secs(1);
+
+    loop {
+        match subscribe_once(endpoint, state.clone()).await {
+            Ok(_) => {
+                backoff = tokio::time::Duration::from_secs(1);
+                warn!("GRPC соединение закрыто, переподключение через {:?}...", backoff);
+            }
+            Err(e) => {
+                error!("GRPC ошибка: {} (переподключение через {:?})", e, backoff);
+            }
+        }
+        tokio::time::sleep(backoff).await;
+        backoff = std::cmp::min(backoff * 2, tokio::time::Duration::from_secs(30));
+    }
+}
+
+async fn subscribe_once(endpoint: &str, state: AppState) -> Result<()> {
     let mut client = GeyserGrpcClient::build_from_shared(endpoint.to_string())?
         .tls_config(ClientTlsConfig::new().with_native_roots())?
         .connect()
         .await?;
+
+    info!("✅ GRPC подключен: {}", endpoint);
 
     // Фильтр для Pump.fun Create транзакций
     let pump_fun_program_id = "6EF8rrecthR5Dkzon8Nwu78hRvfCKubJ14M5uBEwF6P";
@@ -50,19 +111,26 @@ async fn main() -> Result<()> {
 
     let request = SubscribeRequest {
         transactions: transactions_filters,
-        commitment: Some(CommitmentLevel::Confirmed as i32),
+        commitment: Some(CommitmentLevel::Processed as i32),
         ..Default::default()
     };
 
     subscribe_tx.send(request).await?;
-    info!("✅ Подписка отправлена");
+    info!("✅ Подписка на Pump.fun Create отправлена");
 
     while let Some(message) = updates_stream.next().await {
         match message {
-            Ok(update) => process_update(update),
+            Ok(update) => {
+                if let Some(create_tx) = process_update(update) {
+                    // Отправляем Create транзакцию через broadcast
+                    if state.send(create_tx.clone()).is_ok() {
+                        info!("📤 Отправлено Create: mint={} creator={}", create_tx.mint_address, create_tx.creator_address);
+                    }
+                }
+            }
             Err(e) => {
                 error!("Ошибка стрима: {:?}", e);
-                break;
+                return Err(e.into());
             }
         }
     }
@@ -70,72 +138,102 @@ async fn main() -> Result<()> {
     Ok(())
 }
 
-fn process_update(update: SubscribeUpdate) {
+async fn sse_handler(State(tx): State<AppState>) -> Sse<impl StreamExt<Item = Result<Event, axum::Error>>> {
+    let mut rx = tx.subscribe();
+    
+    let stream = async_stream::stream! {
+        while let Ok(create_tx) = rx.recv().await {
+            let json = serde_json::to_string(&create_tx).unwrap();
+            yield Ok(Event::default().data(json));
+        }
+    };
+
+    Sse::new(stream)
+}
+
+async fn health_handler() -> (StatusCode, &'static str) {
+    (StatusCode::OK, "OK")
+}
+
+fn process_update(update: SubscribeUpdate) -> Option<CreateTransaction> {
     if let Some(update_oneof) = update.update_oneof {
         match update_oneof {
             UpdateOneof::Transaction(tx_info) => {
                 // Проверяем, что это Create транзакция Pump.fun
                 if !is_pump_fun_create(&tx_info) {
-                    return; // Пропускаем, если не Create
+                    return None; // Пропускаем, если не Create
                 }
 
-                info!("🔥 Pump.fun Create транзакция в слоте {}", tx_info.slot);
-
                 if let Some(tx) = &tx_info.transaction {
-                    // Получаем подпись из transaction
+                    // Получаем подпись
                     let signature = if !tx.signature.is_empty() {
                         bs58::encode(&tx.signature).into_string()
                     } else if let Some(tx_data) = &tx.transaction {
                         if let Some(first_sig) = tx_data.signatures.first() {
                             bs58::encode(first_sig).into_string()
                         } else {
-                            "unknown".to_string()
+                            return None;
                         }
                     } else {
-                        "unknown".to_string()
+                        return None;
                     };
-                    info!("Подпись: {}", signature);
 
-                    if let Some(tx_data) = &tx.transaction {
+                    // Получаем creator (первый аккаунт)
+                    let creator_address = if let Some(tx_data) = &tx.transaction {
                         if let Some(message) = &tx_data.message {
-                            info!("Аккаунты: {:?}", message.account_keys.iter().map(|key| bs58::encode(key).into_string()).collect::<Vec<_>>());
-                            info!("Recent blockhash: {}", bs58::encode(&message.recent_blockhash).into_string());
+                            if let Some(first_key) = message.account_keys.first() {
+                                bs58::encode(first_key).into_string()
+                            } else {
+                                return None;
+                            }
+                        } else {
+                            return None;
+                        }
+                    } else {
+                        return None;
+                    };
 
-                            for instr in &message.instructions {
-                                let program_id_idx = instr.program_id_index as usize;
-                                if program_id_idx < message.account_keys.len() {
-                                    let program_id = bs58::encode(&message.account_keys[program_id_idx]).into_string();
-                                    let accounts: Vec<String> = instr.accounts.iter()
-                                        .filter_map(|&idx| {
-                                            let idx = idx as usize;
-                                            if idx < message.account_keys.len() {
-                                                Some(bs58::encode(&message.account_keys[idx]).into_string())
-                                            } else {
-                                                None
-                                            }
-                                        })
-                                        .collect();
-                                    info!("Инструкция: Программа {}, Аккаунты: {:?}, Data: {:?}",
-                                        program_id,
-                                        accounts,
-                                        instr.data
-                                    );
+                    // Получаем mint из post_token_balances
+                    let mint_address = if let Some(meta) = &tx.meta {
+                        let post_balances = &meta.post_token_balances;
+                        let pre_balances = &meta.pre_token_balances;
+                        
+                        let pre_mints: std::collections::HashSet<String> = pre_balances.iter()
+                            .filter_map(|b| b.mint.clone())
+                            .collect();
+                        
+                        let mut candidate_mints = vec![];
+                        for balance in post_balances {
+                            if let Some(mint) = &balance.mint {
+                                if !pre_mints.contains(mint) && !mint.contains("11111111111111111111111111111111") {
+                                    candidate_mints.push(mint.clone());
                                 }
                             }
                         }
-                    }
+                        
+                        candidate_mints.iter()
+                            .find(|m| m.ends_with("pump"))
+                            .or_else(|| candidate_mints.first())
+                            .cloned()
+                    } else {
+                        None
+                    };
 
-                    if let Some(meta) = &tx.meta {
-                        if meta.err.is_some() {
-                            info!("Ошибка tx: {:?}", meta.err);
-                        }
-                        info!("Fee: {}", meta.fee);
+                    if let Some(mint) = mint_address {
+                        info!("🔥 Pump.fun Create: mint={} creator={} signature={}", mint, creator_address, signature);
+                        return Some(CreateTransaction {
+                            signature,
+                            mint_address: mint,
+                            creator_address,
+                            slot: tx_info.slot,
+                        });
                     }
                 }
             }
             _ => {}
         }
     }
+    None
 }
 
 fn is_pump_fun_create(tx_info: &yellowstone_grpc_proto::prelude::SubscribeUpdateTransaction) -> bool {
