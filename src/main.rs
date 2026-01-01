@@ -155,11 +155,14 @@ async fn sse_handler(State(tx): State<AppState>) -> impl IntoResponse {
     let rx = tx.subscribe();
     let stream = BroadcastStream::new(rx);
     
-    let stream = stream.filter_map(|result| {
+    let stream = futures::StreamExt::filter_map(stream, |result| {
         futures::future::ready(match result {
             Ok(create_tx) => {
-                let json = serde_json::to_string(&create_tx).ok()?;
-                Some(Ok::<_, std::io::Error>(format!("data: {}\n\n", json)))
+                if let Ok(json) = serde_json::to_string(&create_tx) {
+                    Some(Ok::<_, std::io::Error>(format!("data: {}\n\n", json)))
+                } else {
+                    None
+                }
             }
             Err(_) => None,
         })
@@ -267,11 +270,9 @@ fn is_pump_fun_create(tx_info: &yellowstone_grpc_proto::prelude::SubscribeUpdate
     if let Some(tx) = &tx_info.transaction {
         if let Some(meta) = &tx.meta {
             // Проверяем логи на наличие Pump.fun и Create
-            if let Some(log_messages) = &meta.log_messages {
-                let log_str = match std::str::from_utf8(log_messages) {
-                    Ok(s) => s,
-                    Err(_) => return false,
-                };
+            let log_messages = &meta.log_messages;
+            // log_messages это Vec<String>, нужно объединить в одну строку
+            let log_str = log_messages.join("\n");
                 
                 let has_pump_fun = log_str.contains(pump_fun_program_id);
                 let is_create = log_str.contains("Instruction: Create") && !log_str.contains("CreateV2");
