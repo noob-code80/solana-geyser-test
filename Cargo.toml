@@ -11,6 +11,7 @@ log = "0.4"
 env_logger = "0.11"
 bs58 = "0.5"
 anyhow = "1.0"
+rustls = { version = "0.23", features = ["ring"] }
 
 yellowstone-grpc-proto = "10.1.1"
 yellowstone-grpc-client = "10.2.0"

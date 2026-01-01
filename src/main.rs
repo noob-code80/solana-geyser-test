@@ -13,6 +13,11 @@ use yellowstone_grpc_proto::prelude::{
 #[tokio::main]
 async fn main() -> Result<()> {
     env_logger::init();
+    
+    // Инициализируем криптопровайдер для rustls
+    rustls::crypto::aws_lc_rs::default_provider()
+        .install_default()
+        .expect("Failed to install crypto provider");
 
     let endpoint = "http://fr.grpc.gadflynode.com:25565";
 
