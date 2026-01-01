@@ -15,7 +15,7 @@ async fn main() -> Result<()> {
     env_logger::init();
     
     // Инициализируем криптопровайдер для rustls
-    rustls::crypto::aws_lc_rs::default_provider()
+    rustls::crypto::ring::default_provider()
         .install_default()
         .expect("Failed to install crypto provider");
 
