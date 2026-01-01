@@ -1,5 +1,5 @@
 use anyhow::Result;
-use futures::{SinkExt, StreamExt, Stream};
+use futures::{SinkExt, StreamExt};
 use log::{error, info, warn};
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -12,7 +12,6 @@ use axum::{
     response::{Response, IntoResponse},
     routing::get,
     Router,
-    body::Body,
 };
 use tokio_stream::{wrappers::BroadcastStream, StreamExt as TokioStreamExt};
 use serde::{Deserialize, Serialize};
@@ -130,7 +129,7 @@ async fn subscribe_once(endpoint: &str, state: AppState) -> Result<()> {
     subscribe_tx.send(request).await?;
     info!("✅ Подписка на Pump.fun Create отправлена");
 
-    while let Some(message) = updates_stream.next().await {
+    while let Some(message) = futures::StreamExt::next(&mut updates_stream).await {
         match message {
             Ok(update) => {
                 if let Some(create_tx) = process_update(update) {
@@ -142,7 +141,7 @@ async fn subscribe_once(endpoint: &str, state: AppState) -> Result<()> {
             }
             Err(e) => {
                 error!("Ошибка стрима: {:?}", e);
-                return Err(e.into());
+                return Err(anyhow::anyhow!("GRPC stream error: {}", e));
             }
         }
     }
@@ -228,14 +227,13 @@ fn process_update(update: SubscribeUpdate) -> Option<CreateTransaction> {
                             .filter_map(|b| b.mint.clone())
                             .collect();
                         
-                        let mut candidate_mints = vec![];
-                        for balance in post_balances {
-                            if let Some(mint) = &balance.mint {
-                                if !pre_mints.contains(mint) && !mint.contains("11111111111111111111111111111111") {
-                                    candidate_mints.push(mint.clone());
-                                }
-                            }
-                        }
+    let mut candidate_mints = vec![];
+    for balance in post_balances {
+        let mint = &balance.mint;
+        if !pre_mints.contains(mint) && !mint.contains("11111111111111111111111111111111") {
+            candidate_mints.push(mint.clone());
+        }
+    }
                         
                         candidate_mints.iter()
                             .find(|m| m.ends_with("pump"))
