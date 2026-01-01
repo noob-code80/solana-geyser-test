@@ -1,0 +1,37 @@
+name: Build Windows EXE
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [ main, master ]
+
+jobs:
+  build:
+    runs-on: windows-latest
+    
+    steps:
+    - uses: actions/checkout@v3
+    
+    - name: Install Rust
+      uses: actions-rs/toolchain@v1
+      with:
+        toolchain: stable
+        default: true
+    
+    - name: Install protoc
+      run: |
+        choco install protoc -y
+        echo "PROTOC=C:\ProgramData\chocolatey\lib\protoc\tools\bin\protoc.exe" >> $env:GITHUB_ENV
+    
+    - name: Build
+      run: cargo build --release
+      env:
+        PROTOC: C:\ProgramData\chocolatey\lib\protoc\tools\bin\protoc.exe
+    
+    - name: Upload artifact
+      uses: actions/upload-artifact@v3
+      with:
+        name: solana-geyser-test-windows
+        path: target/release/solana-geyser-test.exe
+        retention-days: 7
+
