@@ -14,8 +14,8 @@ use yellowstone_grpc_proto::prelude::{
 async fn main() -> Result<()> {
     env_logger::init();
     
-    // Инициализируем криптопровайдер для rustls
-    rustls::crypto::ring::default_provider()
+    // Устанавливаем CryptoProvider для rustls
+    rustls::crypto::aws_lc_rs::default_provider()
         .install_default()
         .expect("Failed to install crypto provider");
 
