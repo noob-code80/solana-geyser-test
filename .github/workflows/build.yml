@@ -15,15 +15,34 @@ jobs:
     - name: Install Rust
       uses: dtolnay/rust-toolchain@stable
     
+    - name: Install Chocolatey (if needed)
+      shell: pwsh
+      run: |
+        if (-not (Get-Command choco -ErrorAction SilentlyContinue)) {
+          Set-ExecutionPolicy Bypass -Scope Process -Force
+          [System.Net.ServicePointManager]::SecurityProtocol = [System.Net.ServicePointManager]::SecurityProtocol -bor 3072
+          iex ((New-Object System.Net.WebClient).DownloadString('https://community.chocolatey.org/install.ps1'))
+        }
+    
     - name: Install protoc
+      shell: pwsh
       run: |
         choco install protoc -y
-        echo "PROTOC=C:\ProgramData\chocolatey\lib\protoc\tools\bin\protoc.exe" >> $env:GITHUB_ENV
+        $protocPath = "C:\ProgramData\chocolatey\lib\protoc\tools\bin\protoc.exe"
+        if (Test-Path $protocPath) {
+          echo "PROTOC=$protocPath" >> $env:GITHUB_ENV
+          echo "✅ protoc installed at $protocPath"
+        } else {
+          echo "⚠️ protoc not found, will use vendored version"
+        }
     
     - name: Build
-      run: cargo build --release
+      shell: pwsh
+      run: |
+        $env:RUST_BACKTRACE = "1"
+        cargo build --release
       env:
-        PROTOC: C:\ProgramData\chocolatey\lib\protoc\tools\bin\protoc.exe
+        PROTOC: ${{ env.PROTOC }}
     
     - name: Upload artifact
       uses: actions/upload-artifact@v4
