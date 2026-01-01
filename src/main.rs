@@ -227,19 +227,19 @@ fn process_update(update: SubscribeUpdate) -> Option<CreateTransaction> {
                         let pre_balances = &meta.pre_token_balances;
                         
                         let pre_mints: std::collections::HashSet<String> = pre_balances.iter()
-                            .filter_map(|b| b.mint.clone())
+                            .map(|b| b.mint.clone())
                             .collect();
                         
-    let mut candidate_mints = vec![];
-    for balance in post_balances {
-        let mint = &balance.mint;
-        if !pre_mints.contains(mint) && !mint.contains("11111111111111111111111111111111") {
-            candidate_mints.push(mint.clone());
-        }
-    }
+                        let mut candidate_mints = vec![];
+                        for balance in post_balances {
+                            let mint = &balance.mint;
+                            if !pre_mints.contains(mint) && !mint.contains("11111111111111111111111111111111") {
+                                candidate_mints.push(mint.clone());
+                            }
+                        }
                         
                         candidate_mints.iter()
-                            .find(|m| m.ends_with("pump"))
+                            .find(|m: &&String| m.ends_with("pump"))
                             .or_else(|| candidate_mints.first())
                             .cloned()
                     } else {
