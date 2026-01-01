@@ -12,6 +12,10 @@ use yellowstone_grpc_proto::prelude::{
 
 #[tokio::main]
 async fn main() -> Result<()> {
+    // Устанавливаем уровень логирования по умолчанию, если не задан
+    if std::env::var("RUST_LOG").is_err() {
+        std::env::set_var("RUST_LOG", "info");
+    }
     env_logger::init();
     
     // Устанавливаем CryptoProvider для rustls
