@@ -8,10 +8,11 @@ use tokio::sync::broadcast;
 use bs58;
 use axum::{
     extract::State,
-    http::{StatusCode, HeaderMap, HeaderValue},
+    http::StatusCode,
     response::{Response, IntoResponse},
     routing::get,
     Router,
+    body::Body,
 };
 use tokio_stream::{wrappers::BroadcastStream, StreamExt as TokioStreamExt};
 use serde::{Deserialize, Serialize};
