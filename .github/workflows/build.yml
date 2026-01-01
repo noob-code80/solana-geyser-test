@@ -27,18 +27,25 @@ jobs:
     - name: Install dependencies
       shell: pwsh
       run: |
-        choco install protoc mingw -y
+        choco install protoc msys2 -y
         $protocPath = "C:\ProgramData\chocolatey\lib\protoc\tools\bin\protoc.exe"
-        $mingwPath = "C:\ProgramData\chocolatey\lib\mingw\tools\install\mingw64\bin"
+        $msys2Path = "C:\tools\msys64"
         
         if (Test-Path $protocPath) {
           echo "PROTOC=$protocPath" >> $env:GITHUB_ENV
           echo "✅ protoc installed"
         }
         
-        if (Test-Path $mingwPath) {
-          echo "$mingwPath" >> $env:GITHUB_PATH
-          echo "✅ MinGW installed"
+        if (Test-Path $msys2Path) {
+          # Устанавливаем autoconf и automake через pacman
+          $env:CHERE_INVOKING = "1"
+          $env:MSYSTEM = "MINGW64"
+          & "$msys2Path\usr\bin\bash.exe" -lc "pacman -S --noconfirm autoconf automake make"
+          
+          # Добавляем MSYS2 в PATH
+          echo "$msys2Path\mingw64\bin" >> $env:GITHUB_PATH
+          echo "$msys2Path\usr\bin" >> $env:GITHUB_PATH
+          echo "✅ MSYS2 installed"
         }
     
     - name: Build
@@ -46,15 +53,17 @@ jobs:
       run: |
         $env:RUST_BACKTRACE = "1"
         $env:PROTOC = "C:\ProgramData\chocolatey\lib\protoc\tools\bin\protoc.exe"
-        # Используем MinGW для компиляции protobuf-src
+        # Используем MSYS2 MinGW для компиляции protobuf-src
         $env:CC = "gcc"
         $env:CXX = "g++"
-        $env:PATH = "C:\ProgramData\chocolatey\lib\mingw\tools\install\mingw64\bin;$env:PATH"
+        $env:MAKE = "make"
+        $env:PATH = "C:\tools\msys64\mingw64\bin;C:\tools\msys64\usr\bin;$env:PATH"
         cargo build --release
       env:
         PROTOC: C:\ProgramData\chocolatey\lib\protoc\tools\bin\protoc.exe
         CC: gcc
         CXX: g++
+        MAKE: make
     
     - name: Upload artifact
       uses: actions/upload-artifact@v4
