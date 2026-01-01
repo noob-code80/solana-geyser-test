@@ -273,14 +273,13 @@ fn is_pump_fun_create(tx_info: &yellowstone_grpc_proto::prelude::SubscribeUpdate
             let log_messages = &meta.log_messages;
             // log_messages это Vec<String>, нужно объединить в одну строку
             let log_str = log_messages.join("\n");
-                
-                let has_pump_fun = log_str.contains(pump_fun_program_id);
-                let is_create = log_str.contains("Instruction: Create") && !log_str.contains("CreateV2");
-                let is_create_v2 = log_str.contains("Instruction: CreateV2");
-                
-                if has_pump_fun && (is_create || is_create_v2) {
-                    return true;
-                }
+            
+            let has_pump_fun = log_str.contains(pump_fun_program_id);
+            let is_create = log_str.contains("Instruction: Create") && !log_str.contains("CreateV2");
+            let is_create_v2 = log_str.contains("Instruction: CreateV2");
+            
+            if has_pump_fun && (is_create || is_create_v2) {
+                return true;
             }
         }
     }
