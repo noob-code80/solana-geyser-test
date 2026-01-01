@@ -151,7 +151,6 @@ async fn subscribe_once(endpoint: &str, state: AppState) -> Result<()> {
 
 async fn sse_handler(State(tx): State<AppState>) -> impl IntoResponse {
     use axum::body::Body;
-    use axum::body::HttpBody;
     
     let rx = tx.subscribe();
     let stream = BroadcastStream::new(rx);
