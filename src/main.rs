@@ -30,14 +30,17 @@ async fn main() -> Result<()> {
         .connect()
         .await?;
 
+    // Фильтр для Pump.fun Create транзакций
+    let pump_fun_program_id = "6EF8rrecthR5Dkzon8Nwu78hRvfCKubJ14M5uBEwF6P";
+    
     let mut transactions_filters: HashMap<String, SubscribeRequestFilterTransactions> = HashMap::new();
     transactions_filters.insert(
-        "all_transactions".to_string(),
+        "pump_fun".to_string(),
         SubscribeRequestFilterTransactions {
             vote: Some(false),
-            failed: None,
+            failed: Some(false),
             signature: None,
-            account_include: vec![],
+            account_include: vec![pump_fun_program_id.to_string()],
             account_exclude: vec![],
             account_required: vec![],
         },
@@ -71,7 +74,12 @@ fn process_update(update: SubscribeUpdate) {
     if let Some(update_oneof) = update.update_oneof {
         match update_oneof {
             UpdateOneof::Transaction(tx_info) => {
-                info!("Транзакция в слоте {}", tx_info.slot);
+                // Проверяем, что это Create транзакция Pump.fun
+                if !is_pump_fun_create(&tx_info) {
+                    return; // Пропускаем, если не Create
+                }
+
+                info!("🔥 Pump.fun Create транзакция в слоте {}", tx_info.slot);
 
                 if let Some(tx) = &tx_info.transaction {
                     // Получаем подпись из transaction
@@ -94,12 +102,25 @@ fn process_update(update: SubscribeUpdate) {
                             info!("Recent blockhash: {}", bs58::encode(&message.recent_blockhash).into_string());
 
                             for instr in &message.instructions {
-                                let program_id = bs58::encode(&message.account_keys[instr.program_id_index as usize]).into_string();
-                                info!("Инструкция: Программа {}, Аккаунты: {:?}, Data: {:?}",
-                                    program_id,
-                                    instr.accounts.iter().map(|&idx| bs58::encode(&message.account_keys[idx as usize]).into_string()).collect::<Vec<_>>(),
-                                    instr.data
-                                );
+                                let program_id_idx = instr.program_id_index as usize;
+                                if program_id_idx < message.account_keys.len() {
+                                    let program_id = bs58::encode(&message.account_keys[program_id_idx]).into_string();
+                                    let accounts: Vec<String> = instr.accounts.iter()
+                                        .filter_map(|&idx| {
+                                            let idx = idx as usize;
+                                            if idx < message.account_keys.len() {
+                                                Some(bs58::encode(&message.account_keys[idx]).into_string())
+                                            } else {
+                                                None
+                                            }
+                                        })
+                                        .collect();
+                                    info!("Инструкция: Программа {}, Аккаунты: {:?}, Data: {:?}",
+                                        program_id,
+                                        accounts,
+                                        instr.data
+                                    );
+                                }
                             }
                         }
                     }
@@ -115,4 +136,31 @@ fn process_update(update: SubscribeUpdate) {
             _ => {}
         }
     }
+}
+
+fn is_pump_fun_create(tx_info: &yellowstone_grpc_proto::prelude::SubscribeUpdateTransaction) -> bool {
+    let pump_fun_program_id = "6EF8rrecthR5Dkzon8Nwu78hRvfCKubJ14M5uBEwF6P";
+    
+    // Проверяем метаданные транзакции
+    if let Some(tx) = &tx_info.transaction {
+        if let Some(meta) = &tx.meta {
+            // Проверяем логи на наличие Pump.fun и Create
+            if let Some(log_messages) = &meta.log_messages {
+                let log_str = match std::str::from_utf8(log_messages) {
+                    Ok(s) => s,
+                    Err(_) => return false,
+                };
+                
+                let has_pump_fun = log_str.contains(pump_fun_program_id);
+                let is_create = log_str.contains("Instruction: Create") && !log_str.contains("CreateV2");
+                let is_create_v2 = log_str.contains("Instruction: CreateV2");
+                
+                if has_pump_fun && (is_create || is_create_v2) {
+                    return true;
+                }
+            }
+        }
+    }
+    
+    false
 }
